@@ -3,7 +3,10 @@ name: Check Stock
 on:
   schedule:
     - cron: '0 * * * *' # Runs every hour
-  workflow_dispatch: # Allows you to run it manually for testing
+  workflow_dispatch: # Allows manual testing
+
+permissions:
+  contents: write # REQUIRED: Allows the script to save the status file
 
 jobs:
   check-stock:
@@ -27,3 +30,13 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
         run: node check-stock.js
+
+      - name: Commit Status Change
+        # Only run if the script created/updated the file
+        run: |
+          git config --global user.name "Stock Bot"
+          git config --global user.email "bot@noreply.github.com"
+          git add last_status.txt
+          # The commit will fail if there are no changes (which is good)
+          git commit -m "Update stock status" || exit 0
+          git push
