@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write # REQUIRED: Allows the script to save the status file
+  ## Other permissions can be added here as needed
 
 jobs:
   check-stock:
