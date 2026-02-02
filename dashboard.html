@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ItemCheckR Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body class="bg-white-100 min-h-screen p-8">
+    <div class="max-w-4xl mx-auto">
+        <div class="bg-white-100 rounded-lg shadow-md p-6 mb-6">
+            <h1 class="text-2xl font-bold text-white-600 mb-2">📦 ItemCheckR Dashboard</h1>
+            <p class="text-white-600">Manage your tracked items directly!</p>
+        </div>
+
+        <div class="bg-white-100 rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-lg font-semibold mb-4">Add New Product</h2>
+            <div class="flex gap-4 mb-4">
+                <input type="text" id="newName" placeholder="Product Name" class="flex-1 border p-2 rounded">
+                <input type="url" id="newUrl" placeholder="Product URL" class="flex-[2] border p-2 rounded">
+                <button onclick="addItem()" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">Add</button>
+            </div>
+            <div id="message" class="hidden p-3 rounded text-sm"></div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-lg font-semibold mb-4">Tracked Items</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead>
+                        <tr class="border-b">
+                            <th class="pb-2">id</th>
+                            <th class="pb-2">Name</th>
+                            <th class="pb-2">Status</th>
+                            <th class="pb-2 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="itemTableBody"></tbody>
+                </table>
+                <div id="loading" class="text-center py-4 text-blue-500">Loading data from Azure...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const CONTAINER = "config";
+        const FILE_NAME = "products.json";
+        let BLOB_URL = "";
+        let products = [];
+
+        async function init() {
+            try {
+                // 1. Get Secrets
+                const configRes = await fetch('/config');
+                if (!configRes.ok) throw new Error(`Server Config Error: ${configRes.status}`);
+                
+                const config = await configRes.json();
+                
+                // DEBUGGING ALERTS
+                if (!config.accountName || !config.sasToken) {
+                    alert("DEBUG: Missing credentials in .env file. Account Name or SAS Token is empty.");
+                    throw new Error("Missing credentials");
+                }
+
+                BLOB_URL = `https://${config.accountName}.blob.core.windows.net/${CONTAINER}/${FILE_NAME}${config.sasToken}`;
+                console.log("Target Azure URL:", BLOB_URL); 
+
+                // 2. Fetch Data
+                await fetchProducts();
+            } catch (error) {
+                showMessage("Init Error: " + error.message, "red");
+                console.error(error);
+                document.getElementById('loading').innerText = "Failed to load. Check Console (F12).";
+            }
+        }
+
+        async function fetchProducts() {
+            try {
+                const response = await fetch(BLOB_URL);
+                if (!response.ok) {
+                    throw new Error(`Azure Error ${response.status}: ${response.statusText}`);
+                }
+                products = await response.json();
+                renderTable();
+            } catch (error) {
+                showMessage("Error loading data: " + error.message, "red");
+                console.error("Fetch failed", error);
+            }
+        }
+
+        async function saveProducts() {
+            try {
+                const response = await fetch(BLOB_URL, {
+                    method: 'PUT',
+                    headers: {
+                        'x-ms-blob-type': 'BlockBlob',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(products, null, 2)
+                });
+                if (!response.ok) throw new Error("Failed to save data");
+                showMessage("Changes saved to Azure!", "green");
+                fetchProducts();
+            } catch (error) {
+                showMessage("Error saving data: " + error.message, "red");
+            }
+        }
+
+        function addItem() {
+            const name = document.getElementById('newName').value.trim();
+            const url = document.getElementById('newUrl').value.trim();
+            if (!name || !url) {
+                showMessage("Please fill in both fields", "red");
+                return;
+            }
+            products.push({ id: crypto.randomUUID(), name, url, lastStatus: "PENDING" });
+            document.getElementById('newName').value = "";
+            document.getElementById('newUrl').value = "";
+            saveProducts();
+        }
+
+        function deleteItem(id) {
+            if (confirm("Stop tracking this item?")) {
+                products = products.filter(p => p.id !== id);
+                saveProducts();
+            }
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('itemTableBody');
+            tbody.innerHTML = "";
+            document.getElementById('loading').style.display = 'none';
+
+            products.forEach(item => {
+                const row = document.createElement('tr');
+                row.className = "border-b last:border-0 hover:bg-gray-50";
+                let statusColor = "text-gray-500";
+                if (item.lastStatus === "IN_STOCK") statusColor = "text-green-600 font-bold";
+                if (item.lastStatus === "OUT_OF_STOCK") statusColor = "text-red-600 font-bold";
+
+                row.innerHTML = `
+                    <td class="py-3 text-xs text-gray-400 font-mono">${item.id}</td>
+                        <div class="font-medium">${item.name}</div>
+                        <a href="${item.url}" target="_blank" class="text-xs text-blue-500 hover:underline truncate block max-w-md">${item.url}</a>
+                    </td>
+                    <td class="py-3 ${statusColor}">${item.lastStatus}</td>
+                    <td class="py-3 text-right">
+                        <button onclick="deleteItem('${item.id}')" class="text-red-500 hover:text-red-700 px-2">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function showMessage(text, color) {
+            const msg = document.getElementById('message');
+            msg.innerText = text;
+            msg.className = `p-3 rounded text-sm mb-4 bg-${color}-100 text-${color}-700`;
+            msg.classList.remove('hidden');
+            setTimeout(() => msg.classList.add('hidden'), 5000);
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+name: Check Stock Staging
+
+on:
+  push:
+    branches:
+      - staging
+  schedule:
+    - cron: '0 */1 * * *' # Runs every 1 hour
+  workflow_dispatch:      # Allows manual trigger button
+
+permissions:
+  contents: read          # We no longer need 'write' permissions since we aren't saving .txt files
+
+jobs:
+  check-stock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Run Stock Check
+        env:
+          # Injecting the secrets from GitHub Vault into the script
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_SAS_TOKEN: ${{ secrets.AZURE_SAS_TOKEN }}
+        run: node check-stock.js
