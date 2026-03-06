@@ -1,121 +1,72 @@
 const { chromium } = require('playwright');
-require('dotenv').config({ path: 'secrets.env' }); // Load secrets for local testing
+const fs = require('fs');
+const path = require('path');
 
-// ================= CONFIGURATION =================
-const ACCOUNT = process.env.AZURE_STORAGE_ACCOUNT;
-const SAS = process.env.AZURE_SAS_TOKEN;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
-const CONTAINER = "config";
-const FILE = "products.json";
-
-// Fix SAS token if missing '?'
-const SAS_TOKEN = SAS && !SAS.startsWith('?') ? `?${SAS}` : SAS;
-const DATA_URL = `https://${ACCOUNT}.blob.core.windows.net/${CONTAINER}/${FILE}${SAS_TOKEN}`;
-// =================================================
+// File to store the last known status
+const STATUS_FILE = 'last_status.txt';
 
 (async () => {
-    // 1. Fetch Product List from Azure
-    console.log("📥 Fetching product list from Azure...");
-    let products = [];
-    try {
-        const res = await fetch(DATA_URL);
-        if (!res.ok) throw new Error(`Azure Error: ${res.status} ${res.statusText}`);
-        products = await res.json();
-    } catch (e) {
-        console.error("❌ Failed to load products:", e.message);
-        process.exit(1);
-    }
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  const productUrl = 'https://www.mondou.com/en-CA/tuna-recipe-with-ocean-fish-in-gravy-wet-food-for-senior-cats-1045870.html'; 
+  const webhookUrl = process.env.WEBHOOK_URL;
 
-    if (products.length === 0) {
-        console.log("No products to check.");
-        return;
-    }
-    console.log(`Found ${products.length} product(s).`);
+  // 1. Read the previous status from file (if it exists)
+  let lastStatus = 'UNKNOWN';
+  if (fs.existsSync(STATUS_FILE)) {
+      lastStatus = fs.readFileSync(STATUS_FILE, 'utf8').trim();
+  }
+  console.log(`Previous Status: ${lastStatus}`);
 
-    // 2. Launch Browser
-    const browser = await chromium.launch();
-    const context = await browser.newContext();
-    let hasChanges = false;
+  // 2. Check Current Status
+  console.log(`Navigating to ${productUrl}...`);
+  await page.goto(productUrl);
 
-    // 3. Loop Through Items
-    for (const item of products) {
-        console.log(`\n🔎 Checking: ${item.name}`);
-        const page = await context.newPage();
-        
-        try {
-            await page.goto(item.url);
-            
-            // --- Stock Check Logic ---
-            const addToCartBtn = page.locator('button.add-to-cart');
-            let currentStatus = 'IN_STOCK';
-            
-            try {
-                // Try clicking "Add to Cart" to see if it rejects us
-                await addToCartBtn.click({ timeout: 5000 });
-                await page.waitForTimeout(2000); 
-                
-                // Mondou specific error message for OOS
-                const errorText = 'The quantity requested exceeds the available inventory';
-                const isErrorVisible = await page.getByText(errorText).isVisible();
-                
-                if (isErrorVisible) currentStatus = 'OUT_OF_STOCK';
-            } catch (e) {
-                // If button is disabled or missing, assume OOS
-                 if (await addToCartBtn.isDisabled() || !(await addToCartBtn.isVisible())) {
-                    currentStatus = 'OUT_OF_STOCK';
-                }
-            }
-            // -------------------------
+  const addToCartBtn = page.locator('button.add-to-cart');
+  console.log('Checking Stock Status via Interaction...');
+  
+  // Attempt click logic
+  let currentStatus = 'IN_STOCK';
+  try {
+      await addToCartBtn.click({ timeout: 5000 });
+      await page.waitForTimeout(3000);
+      const errorText = 'The quantity requested exceeds the available inventory';
+      const isErrorVisible = await page.getByText(errorText).isVisible();
+      if (isErrorVisible) currentStatus = 'OUT_OF_STOCK';
+  } catch (e) {
+      // If click fails/timeouts, button might be disabled or hidden
+      if (await addToCartBtn.isDisabled()) {
+          currentStatus = 'OUT_OF_STOCK';
+      }
+  }
+  console.log(`Current Status: ${currentStatus}`);
 
-            console.log(`   Status: ${currentStatus} (Previous: ${item.lastStatus})`);
+  // 3. Compare and Act
+  if (currentStatus !== lastStatus) {
+      console.log(`⚠ STATUS CHANGE DETECTED! (${lastStatus} -> ${currentStatus})`);
+      
+      // Update the local file
+      fs.writeFileSync(STATUS_FILE, currentStatus);
 
-            // 4. Compare & Act
-            if (currentStatus !== item.lastStatus) {
-                console.log(`   ⚠️ CHANGE DETECTED!`);
-                item.lastStatus = currentStatus;
-                hasChanges = true;
+      // Trigger Webhook
+      if (webhookUrl) {
+          console.log(`Sending Alert to Azure...`);
+          try {
+              await page.request.post(webhookUrl, {
+                  data: {
+                      status: currentStatus,
+                      productUrl: productUrl,
+                      timestamp: new Date().toISOString()
+                  }
+              });
+              console.log('Webhook sent successfully.');
+          } catch (error) {
+              console.error('Failed to send webhook:', error);
+          }
+      }
+  } else {
+      console.log('No change in status. No alert sent.');
+  }
 
-                // Send Alert
-                if (WEBHOOK_URL) {
-                    await fetch(WEBHOOK_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            product: item.name,
-                            url: item.url,
-                            status: currentStatus,
-                            timestamp: new Date().toISOString()
-                        })
-                    });
-                    console.log("   📨 Alert sent.");
-                }
-            }
-
-        } catch (err) {
-            console.error(`   ❌ Error checking item:`, err.message);
-        } finally {
-            await page.close();
-        }
-    }
-
-    await browser.close();
-
-    // 5. Save Updates to Azure
-    if (hasChanges) {
-        console.log("\n💾 Saving updates to Azure...");
-        const res = await fetch(DATA_URL, {
-            method: 'PUT',
-            headers: {
-                'x-ms-blob-type': 'BlockBlob',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(products, null, 2)
-        });
-        
-        if (res.ok) console.log("✅ Azure updated successfully.");
-        else console.error("❌ Failed to update Azure:", res.statusText);
-    } else {
-        console.log("\n✅ No status changes found.");
-    }
-
+  await browser.close();
 })();
