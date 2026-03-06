@@ -1,4 +1,4 @@
-# 🐱 Mondou Stock Monitor
+# Stock Monitor
 
 A "Smart" automated stock tracking system for Mondou pet products. This bot checks stock status hourly, maintains state to prevent spam, alerts via Email upon changes, and logs history to Google Sheets for pattern analysis.
 
