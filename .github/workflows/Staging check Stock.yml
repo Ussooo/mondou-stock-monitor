@@ -1,12 +1,12 @@
 name: Check Stock Staging
 
-on:
-  push:
-    branches:
+## on:
+  ## push:
+    ## branches:
       - staging
-  schedule:
-    - cron: '0 */1 * * *' # Runs every 1 hour
-  workflow_dispatch:      # Allows manual trigger button
+  ## schedule:
+    - ## cron: '0 */1 * * *' # Runs every 1 hour
+  ## workflow_dispatch:      # Allows manual trigger button
 
 permissions:
   contents: read          # We no longer need 'write' permissions since we aren't saving .txt files
